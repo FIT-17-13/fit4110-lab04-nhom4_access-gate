@@ -1,0 +1,10 @@
+{
+  "gate_id": "GATE-A01",
+  "credential_id": "FACE-1001",
+  "credential_type": "face",
+  "person_id": "STU-2026-0001",
+  "decision": "granted",
+  "confidence": 1,
+  "reason": "face_match",
+  "timestamp": "2026-05-13T08:30:00+07:00"
+}

@@ -1,0 +1,7 @@
+{
+  "credential_id": "CARD-1001",
+  "credential_type": "card",
+  "decision": "granted",
+  "confidence": 0.95,
+  "timestamp": "2026-05-13T08:30:00+07:00"
+}

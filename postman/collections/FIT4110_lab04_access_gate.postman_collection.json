@@ -1,0 +1,406 @@
+{
+  "info": {
+    "name": "FIT4110 Lab04 Access Gate Docker Verification",
+    "description": "Postman collection to verify the Dockerized Access Gate service in Lab 04.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01_Functional",
+      "item": [
+        {
+          "name": "GET health returns 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Response has access-gate service name', function () { const json = pm.response.json(); pm.expect(json.status).to.eql('ok'); pm.expect(json.service).to.eql('access-gate'); });",
+                  "pm.test('Response exposes integration URLs for later labs', function () { const json = pm.response.json(); pm.expect(json.integrations).to.have.property('core_service_url'); pm.expect(json.integrations).to.have.property('camera_service_url'); pm.expect(json.integrations).to.have.property('notification_service_url'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST valid access event returns 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gate_id\": \"GATE-A01\",\n  \"credential_id\": \"CARD-1001\",\n  \"credential_type\": \"card\",\n  \"person_id\": \"STU-2026-0001\",\n  \"decision\": \"granted\",\n  \"confidence\": 0.95,\n  \"reason\": \"policy_pass\",\n  \"timestamp\": \"2026-05-13T08:30:00+07:00\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201', function () { pm.response.to.have.status(201); });",
+                  "pm.test('Response follows created-event schema', function () { const json = pm.response.json(); pm.expect(json).to.have.property('event_id'); pm.expect(json.event_id).to.match(/^AG-[0-9]{8}-[0-9]{4}$/); pm.expect(json).to.have.property('accepted', true); pm.expect(json.decision).to.eql('granted'); });",
+                  "const created = pm.response.json();",
+                  "if (created.event_id) { pm.environment.set('createdEventId', created.event_id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET latest access events returns items array",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events/latest?gate_id=GATE-A01&limit=5"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Response has items array', function () { const json = pm.response.json(); pm.expect(json).to.have.property('items'); pm.expect(json.items).to.be.an('array'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET access event by saved event_id returns 200",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events/{{createdEventId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Response event_id matches saved variable', function () { const json = pm.response.json(); const saved = pm.environment.get('createdEventId'); pm.expect(json.event_id).to.eql(saved); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02_Auth",
+      "item": [
+        {
+          "name": "POST access event without token returns 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gate_id\": \"GATE-A01\",\n  \"credential_id\": \"CARD-1001\",\n  \"credential_type\": \"card\",\n  \"decision\": \"granted\",\n  \"confidence\": 0.95,\n  \"timestamp\": \"2026-05-13T08:30:00+07:00\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('env') === 'mock') {",
+                  "  pm.test('Mock may not enforce auth', function () { pm.expect([200, 201, 401, 403]).to.include(pm.response.code); });",
+                  "} else {",
+                  "  pm.test('Missing token returns 401', function () { pm.response.to.have.status(401); });",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('type'); pm.expect(json).to.have.property('title'); pm.expect(json).to.have.property('status'); pm.expect(json).to.have.property('detail');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST access event with wrong token returns 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer wrong-token"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gate_id\": \"GATE-A01\",\n  \"credential_id\": \"CARD-1001\",\n  \"credential_type\": \"card\",\n  \"decision\": \"granted\",\n  \"confidence\": 0.95,\n  \"timestamp\": \"2026-05-13T08:30:00+07:00\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('env') === 'mock') {",
+                  "  pm.test('Mock may not enforce auth', function () { pm.expect([200, 201, 401, 403]).to.include(pm.response.code); });",
+                  "} else {",
+                  "  pm.test('Wrong token returns 401', function () { pm.response.to.have.status(401); });",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.status).to.be.within(400, 599);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03_Negative",
+      "item": [
+        {
+          "name": "POST access event missing gate_id returns validation error",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credential_id\": \"CARD-1001\",\n  \"credential_type\": \"card\",\n  \"decision\": \"granted\",\n  \"confidence\": 0.95,\n  \"timestamp\": \"2026-05-13T08:30:00+07:00\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('env') === 'mock') {",
+                  "  pm.test('Mock response is documented', function () { pm.expect([201, 400, 422]).to.include(pm.response.code); });",
+                  "} else {",
+                  "  pm.test('Missing required field returns 422', function () { pm.response.to.have.status(422); });",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('type'); pm.expect(json).to.have.property('title'); pm.expect(json).to.have.property('status'); pm.expect(json).to.have.property('detail');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST access event with invalid decision returns validation error",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gate_id\": \"GATE-A01\",\n  \"credential_id\": \"CARD-1001\",\n  \"credential_type\": \"card\",\n  \"decision\": \"allowed\",\n  \"confidence\": 0.95,\n  \"timestamp\": \"2026-05-13T08:30:00+07:00\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('env') === 'mock') {",
+                  "  pm.test('Mock response is documented', function () { pm.expect([201, 400, 422]).to.include(pm.response.code); });",
+                  "} else {",
+                  "  pm.test('Invalid enum returns 422', function () { pm.response.to.have.status(422); });",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.status).to.be.within(400, 599);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04_Boundary_Reliability",
+      "item": [
+        {
+          "name": "POST confidence 1 is accepted",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gate_id\": \"GATE-A01\",\n  \"credential_id\": \"FACE-1001\",\n  \"credential_type\": \"face\",\n  \"person_id\": \"STU-2026-0001\",\n  \"decision\": \"granted\",\n  \"confidence\": 1,\n  \"reason\": \"face_match\",\n  \"timestamp\": \"2026-05-13T08:30:00+07:00\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Boundary confidence 1 returns 201', function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST confidence 1.01 is rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gate_id\": \"GATE-A01\",\n  \"credential_id\": \"FACE-1001\",\n  \"credential_type\": \"face\",\n  \"decision\": \"granted\",\n  \"confidence\": 1.01,\n  \"timestamp\": \"2026-05-13T08:30:00+07:00\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('env') === 'mock') {",
+                  "  pm.test('Mock response is documented', function () { pm.expect([201, 400, 422]).to.include(pm.response.code); });",
+                  "} else {",
+                  "  pm.test('Boundary confidence 1.01 returns 422', function () { pm.response.to.have.status(422); });",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('type'); pm.expect(json).to.have.property('title'); pm.expect(json).to.have.property('status'); pm.expect(json).to.have.property('detail');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST denied event is accepted with warning",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/access-events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gate_id\": \"GATE-A01\",\n  \"credential_id\": \"CARD-9999\",\n  \"credential_type\": \"card\",\n  \"decision\": \"denied\",\n  \"confidence\": 0.4,\n  \"reason\": \"policy_denied\",\n  \"timestamp\": \"2026-05-13T08:30:00+07:00\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Denied event returns 201', function () { pm.response.to.have.status(201); });",
+                  "if (pm.environment.get('env') !== 'mock') { pm.test('Denied event includes warning header', function () { pm.expect(pm.response.headers.has('X-Warning')).to.eql(true); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET health responds under 1000ms on local/container",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('env') !== 'mock') { pm.test('Response time is below 1000ms', function () { pm.expect(pm.response.responseTime).to.be.below(1000); }); }",
+                  "pm.test('Health endpoint is reachable', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

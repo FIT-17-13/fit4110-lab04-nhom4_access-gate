@@ -1,0 +1,320 @@
+openapi: 3.1.0
+info:
+  title: FIT4110 Lab 04 - Access Gate API
+  version: 0.4.0
+  contact:
+    name: team-gate
+  description: |
+    Contract for the Smart Campus Access Gate service.
+    Lab 04 runs this service as a single Docker container. URLs for Core,
+    Camera, and Notification services are exposed as configuration for later
+    multi-service integration.
+servers:
+  - url: http://localhost:8000
+    description: Local or Docker container service
+  - url: http://localhost:4010
+    description: Prism mock server
+tags:
+  - name: system
+    description: Health and runtime information
+  - name: access-events
+    description: Gate entry and exit events
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Check service health
+      description: Public endpoint used by Docker HEALTHCHECK, CI, and local verification.
+      security: []
+      responses:
+        "200":
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /access-events:
+    post:
+      tags: [access-events]
+      operationId: createAccessEvent
+      summary: Record one access gate event
+      description: Accepts a card, QR, face, or license plate access event from a campus gate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccessEventCreate"
+            examples:
+              granted_card:
+                value:
+                  gate_id: GATE-A01
+                  credential_id: CARD-1001
+                  credential_type: card
+                  person_id: STU-2026-0001
+                  decision: granted
+                  confidence: 0.95
+                  reason: policy_pass
+                  timestamp: "2026-05-13T08:30:00+07:00"
+              denied_card:
+                value:
+                  gate_id: GATE-A01
+                  credential_id: CARD-9999
+                  credential_type: card
+                  decision: denied
+                  confidence: 0.42
+                  reason: policy_denied
+                  timestamp: "2026-05-13T08:30:00+07:00"
+      responses:
+        "201":
+          description: Event accepted
+          headers:
+            X-Warning:
+              description: Warning for denied or low-confidence access events.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessEventCreated"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "422":
+          description: Request validation error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  /access-events/latest:
+    get:
+      tags: [access-events]
+      operationId: getLatestAccessEvents
+      summary: Get latest access events
+      description: Returns recent access events, optionally filtered by gate.
+      parameters:
+        - in: query
+          name: gate_id
+          required: false
+          schema:
+            type: string
+          example: GATE-A01
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          example: 5
+      responses:
+        "200":
+          description: Latest events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AccessEvent"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "422":
+          description: Query validation error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  /access-events/{event_id}:
+    get:
+      tags: [access-events]
+      operationId: getAccessEventById
+      summary: Get one access event
+      description: Returns one access event by its generated event id.
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^AG-[0-9]{8}-[0-9]{4}$"
+          example: AG-20260513-0001
+      responses:
+        "200":
+          description: Access event details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessEvent"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "404":
+          description: Event not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+
+  schemas:
+    AccessDecision:
+      type: string
+      enum: [granted, denied, manual_review]
+
+    CredentialType:
+      type: string
+      enum: [card, qr, face, license_plate]
+
+    AccessEventCreate:
+      type: object
+      required:
+        - gate_id
+        - credential_id
+        - credential_type
+        - decision
+        - timestamp
+      properties:
+        gate_id:
+          type: string
+          minLength: 3
+          example: GATE-A01
+        credential_id:
+          type: string
+          minLength: 3
+          example: CARD-1001
+        credential_type:
+          $ref: "#/components/schemas/CredentialType"
+        person_id:
+          type: string
+          example: STU-2026-0001
+        decision:
+          $ref: "#/components/schemas/AccessDecision"
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.95
+        reason:
+          type: string
+          maxLength: 120
+          example: policy_pass
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-05-13T08:30:00+07:00"
+
+    AccessEvent:
+      allOf:
+        - $ref: "#/components/schemas/AccessEventCreate"
+        - type: object
+          required: [event_id, created_at]
+          properties:
+            event_id:
+              type: string
+              pattern: "^AG-[0-9]{8}-[0-9]{4}$"
+              example: AG-20260513-0001
+            created_at:
+              type: string
+              format: date-time
+
+    AccessEventCreated:
+      type: object
+      required: [event_id, gate_id, decision, accepted, created_at]
+      properties:
+        event_id:
+          type: string
+          pattern: "^AG-[0-9]{8}-[0-9]{4}$"
+          example: AG-20260513-0001
+        gate_id:
+          type: string
+          example: GATE-A01
+        decision:
+          $ref: "#/components/schemas/AccessDecision"
+        accepted:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+
+    HealthResponse:
+      type: object
+      required: [status, service, version, integrations]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+        service:
+          type: string
+          example: access-gate
+        version:
+          type: string
+          example: 0.4.0
+        integrations:
+          type: object
+          required:
+            - core_service_url
+            - camera_service_url
+            - notification_service_url
+          properties:
+            core_service_url:
+              type: string
+              example: http://core:8000
+            camera_service_url:
+              type: string
+              example: http://camera:8000
+            notification_service_url:
+              type: string
+              example: http://notify:8000
+
+    ProblemDetails:
+      type: object
+      required: [type, title, status, detail]
+      properties:
+        type:
+          type: string
+          example: https://smart-campus.local/problems/validation-error
+        title:
+          type: string
+          example: Validation error
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+          example: 422
+        detail:
+          type: string
+          example: "body.confidence: Input should be less than or equal to 1"
+        instance:
+          type: string
+          example: /access-events

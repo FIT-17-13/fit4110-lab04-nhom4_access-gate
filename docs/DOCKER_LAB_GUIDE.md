@@ -28,8 +28,8 @@ Container = tiến trình đang chạy từ image
 Ví dụ:
 
 ```bash
-docker build -t fit4110/iot-ingestion:lab04 .
-docker run -p 8000:8000 fit4110/iot-ingestion:lab04
+docker build -t fit4110/access-gate:lab04 .
+docker run -p 8000:8000 fit4110/access-gate:lab04
 ```
 
 ---
@@ -43,7 +43,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY src/ ./src/
 EXPOSE 8000
-CMD ["uvicorn", "iot_app.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "access_gate_app.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 Dockerfile trong repo này tốt hơn bản tối thiểu vì có:

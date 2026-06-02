@@ -1,4 +1,5 @@
 import os
+import http.client
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional
@@ -9,32 +10,36 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 
-SERVICE_NAME = os.getenv("SERVICE_NAME", "iot-ingestion")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "access-gate")
 SERVICE_VERSION = os.getenv("SERVICE_VERSION", "0.4.0")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", "local-dev-token")
 
+CORE_SERVICE_URL = os.getenv("CORE_SERVICE_URL", "http://core:8000")
+CAMERA_SERVICE_URL = os.getenv("CAMERA_SERVICE_URL", "http://camera:8000")
+NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://notify:8000")
+
 
 app = FastAPI(
-    title="FIT4110 Lab 04 - IoT Ingestion Service",
+    title="FIT4110 Lab 04 - Access Gate Service",
     version=SERVICE_VERSION,
     description=(
-        "Dockerized IoT Ingestion API aligned with the Lab 03 OpenAPI/Postman contract."
+        "Dockerized Access Gate API for Smart Campus entry events. "
+        "External service URLs are configured for later multi-service integration."
     ),
 )
 
 
-class SensorMetric(str, Enum):
-    temperature = "temperature"
-    humidity = "humidity"
-    motion = "motion"
-    smoke = "smoke"
+class AccessDecision(str, Enum):
+    granted = "granted"
+    denied = "denied"
+    manual_review = "manual_review"
 
 
-class SensorUnit(str, Enum):
-    celsius = "celsius"
-    percent = "percent"
-    boolean = "boolean"
-    ppm = "ppm"
+class CredentialType(str, Enum):
+    card = "card"
+    qr = "qr"
+    face = "face"
+    license_plate = "license_plate"
 
 
 class ProblemDetails(BaseModel):
@@ -45,45 +50,58 @@ class ProblemDetails(BaseModel):
     instance: Optional[str] = None
 
 
+class IntegrationConfig(BaseModel):
+    core_service_url: str
+    camera_service_url: str
+    notification_service_url: str
+
+
 class HealthResponse(BaseModel):
     status: str
     service: str
     version: str
+    integrations: IntegrationConfig
 
 
-class SensorReadingCreate(BaseModel):
-    device_id: str = Field(..., min_length=3, examples=["ESP32-LAB-A01"])
-    metric: SensorMetric = Field(..., examples=["temperature"])
-    value: float = Field(
-        ...,
-        ge=-40,
-        le=80,
-        description="Boundary range used in Lab 03 and Lab 04: -40 to 80.",
-        examples=[31.5],
+class AccessEventCreate(BaseModel):
+    gate_id: str = Field(..., min_length=3, examples=["GATE-A01"])
+    credential_id: str = Field(..., min_length=3, examples=["CARD-1001"])
+    credential_type: CredentialType = Field(..., examples=["card"])
+    person_id: Optional[str] = Field(default=None, examples=["STU-2026-0001"])
+    decision: AccessDecision = Field(..., examples=["granted"])
+    confidence: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="Boundary range used for gate verification confidence: 0 to 1.",
+        examples=[0.95],
     )
-    unit: Optional[SensorUnit] = Field(default=None, examples=["celsius"])
+    reason: Optional[str] = Field(default=None, max_length=120, examples=["policy_pass"])
     timestamp: str = Field(..., examples=["2026-05-13T08:30:00+07:00"])
 
 
-class SensorReading(BaseModel):
-    reading_id: str
-    device_id: str
-    metric: SensorMetric
-    value: float
-    unit: Optional[SensorUnit] = None
+class AccessEvent(BaseModel):
+    event_id: str
+    gate_id: str
+    credential_id: str
+    credential_type: CredentialType
+    person_id: Optional[str] = None
+    decision: AccessDecision
+    confidence: Optional[float] = None
+    reason: Optional[str] = None
     timestamp: str
     created_at: str
 
 
-class SensorReadingCreated(BaseModel):
-    reading_id: str
-    device_id: str
-    metric: SensorMetric
+class AccessEventCreated(BaseModel):
+    event_id: str
+    gate_id: str
+    decision: AccessDecision
     accepted: bool
     created_at: str
 
 
-READINGS: List[Dict] = []
+ACCESS_EVENTS: List[Dict] = []
 
 
 def build_problem(
@@ -112,13 +130,13 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     else:
         problem = build_problem(
             status_code=exc.status_code,
-            title=status.HTTP_STATUS_CODES.get(exc.status_code, "HTTP Error"),
+            title=http.client.responses.get(exc.status_code, "HTTP Error"),
             detail=str(exc.detail),
             instance=str(request.url.path),
         )
 
     problem.setdefault("status", exc.status_code)
-    problem.setdefault("title", status.HTTP_STATUS_CODES.get(exc.status_code, "HTTP Error"))
+    problem.setdefault("title", http.client.responses.get(exc.status_code, "HTTP Error"))
     problem.setdefault("type", "about:blank")
     problem.setdefault("detail", "Request failed")
     problem.setdefault("instance", str(request.url.path))
@@ -182,9 +200,9 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def next_reading_id() -> str:
+def next_event_id() -> str:
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
-    return f"R-{today}-{len(READINGS) + 1:04d}"
+    return f"AG-{today}-{len(ACCESS_EVENTS) + 1:04d}"
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -193,64 +211,75 @@ def health() -> HealthResponse:
         status="ok",
         service=SERVICE_NAME,
         version=SERVICE_VERSION,
+        integrations=IntegrationConfig(
+            core_service_url=CORE_SERVICE_URL,
+            camera_service_url=CAMERA_SERVICE_URL,
+            notification_service_url=NOTIFICATION_SERVICE_URL,
+        ),
     )
 
 
 @app.post(
-    "/readings",
-    response_model=SensorReadingCreated,
+    "/access-events",
+    response_model=AccessEventCreated,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(verify_bearer_token)],
     responses={
         401: {"model": ProblemDetails},
         422: {"model": ProblemDetails},
-        429: {"model": ProblemDetails},
     },
 )
-def create_reading(payload: SensorReadingCreate, response: Response) -> SensorReadingCreated:
-    if payload.metric == SensorMetric.temperature and payload.value >= 70:
-        response.headers["X-Warning"] = "high-temperature"
+def create_access_event(
+    payload: AccessEventCreate, response: Response
+) -> AccessEventCreated:
+    if payload.decision == AccessDecision.denied:
+        response.headers["X-Warning"] = "access-denied"
+    elif payload.confidence is not None and payload.confidence < 0.5:
+        response.headers["X-Warning"] = "low-confidence"
 
-    reading_id = next_reading_id()
+    event_id = next_event_id()
     created_at = now_iso()
 
     item = {
-        "reading_id": reading_id,
-        "device_id": payload.device_id,
-        "metric": payload.metric.value,
-        "value": payload.value,
-        "unit": payload.unit.value if payload.unit else None,
+        "event_id": event_id,
+        "gate_id": payload.gate_id,
+        "credential_id": payload.credential_id,
+        "credential_type": payload.credential_type.value,
+        "person_id": payload.person_id,
+        "decision": payload.decision.value,
+        "confidence": payload.confidence,
+        "reason": payload.reason,
         "timestamp": payload.timestamp,
         "created_at": created_at,
     }
-    READINGS.append(item)
+    ACCESS_EVENTS.append(item)
 
-    return SensorReadingCreated(
-        reading_id=reading_id,
-        device_id=payload.device_id,
-        metric=payload.metric,
+    return AccessEventCreated(
+        event_id=event_id,
+        gate_id=payload.gate_id,
+        decision=payload.decision,
         accepted=True,
         created_at=created_at,
     )
 
 
-@app.get("/readings/latest", dependencies=[Depends(verify_bearer_token)])
-def latest_readings(
-    device_id: Optional[str] = Query(default=None),
+@app.get("/access-events/latest", dependencies=[Depends(verify_bearer_token)])
+def latest_access_events(
+    gate_id: Optional[str] = Query(default=None),
     limit: int = Query(default=10, ge=1, le=100),
 ) -> Dict[str, List[Dict]]:
-    items = READINGS
+    items = ACCESS_EVENTS
 
-    if device_id:
-        items = [item for item in items if item["device_id"] == device_id]
+    if gate_id:
+        items = [item for item in items if item["gate_id"] == gate_id]
 
     return {"items": items[-limit:]}
 
 
-@app.get("/readings/{reading_id}", dependencies=[Depends(verify_bearer_token)])
-def get_reading(reading_id: str) -> Dict:
-    for item in READINGS:
-        if item["reading_id"] == reading_id:
+@app.get("/access-events/{event_id}", dependencies=[Depends(verify_bearer_token)])
+def get_access_event(event_id: str) -> Dict:
+    for item in ACCESS_EVENTS:
+        if item["event_id"] == event_id:
             return item
 
     raise HTTPException(
@@ -258,8 +287,8 @@ def get_reading(reading_id: str) -> Dict:
         detail=build_problem(
             status_code=status.HTTP_404_NOT_FOUND,
             title="Not Found",
-            detail=f"Reading {reading_id} does not exist",
-            instance=f"/readings/{reading_id}",
+            detail=f"Access event {event_id} does not exist",
+            instance=f"/access-events/{event_id}",
             problem_type="https://smart-campus.local/problems/not-found",
         ),
     )

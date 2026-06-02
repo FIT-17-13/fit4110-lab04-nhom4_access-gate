@@ -1,0 +1,10 @@
+{
+  "gate_id": "GATE-A01",
+  "credential_id": "CARD-1001",
+  "credential_type": "card",
+  "person_id": "STU-2026-0001",
+  "decision": "granted",
+  "confidence": 0.95,
+  "reason": "policy_pass",
+  "timestamp": "2026-05-13T08:30:00+07:00"
+}
